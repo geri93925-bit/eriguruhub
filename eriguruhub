@@ -1,0 +1,163 @@
+-- =============================================================
+-- ⚙️ ERIGURUHUB v32.0 - 統合完全版 (GUI & TP Switch)
+-- =============================================================
+_G.AimStrength = 0.5     
+_G.AimFOV      = 150     
+_G.FlySpeed    = 150
+_G.TP_Hotkey   = Enum.KeyCode.Q
+_G.AimbotKey   = Enum.UserInputType.MouseButton2
+-- =============================================================
+
+local players = game:GetService("Players")
+local runService = game:GetService("RunService")
+local coreGui = game:GetService("CoreGui")
+local uis = game:GetService("UserInputService")
+local camera = workspace.CurrentCamera
+local lp = players.LocalPlayer
+
+-- 古いGUIを掃除
+for _, v in pairs(coreGui:GetChildren()) do if v.Name:find("ERIGURU") then v:Destroy() end end
+
+local screenGui = Instance.new("ScreenGui", coreGui); screenGui.Name = "ERIGURUHUB_v32"
+screenGui.IgnoreGuiInset = true
+
+-- 🎯 FOV Circle
+local fovCircle = Instance.new("Frame", screenGui)
+fovCircle.BackgroundTransparency = 1; fovCircle.BorderSizePixel = 0
+local uic = Instance.new("UICorner", fovCircle); uic.CornerRadius = UDim.new(1, 0)
+local stroke = Instance.new("UIStroke", fovCircle); stroke.Thickness = 1.5; stroke.Color = Color3.fromRGB(255, 0, 0); stroke.Transparency = 0.5
+
+-- --- 🎨 GUI構成 ---
+local main = Instance.new("Frame", screenGui)
+main.Size = UDim2.new(0, 200, 0, 460); main.Position = UDim2.new(0.05, 0, 0.2, 0); main.BackgroundColor3 = Color3.new(0,0,0)
+Instance.new("UICorner", main)
+local list = Instance.new("UIListLayout", main); list.Padding = UDim.new(0, 5); list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local function createSlider(text, min, max, default, callback)
+    local f = Instance.new("Frame", main); f.Size = UDim2.new(0.9, 0, 0, 38); f.BackgroundTransparency = 1
+    local l = Instance.new("TextLabel", f); l.Size = UDim2.new(1, 0, 0, 15); l.Text = text.." : "..default; l.TextColor3 = Color3.new(1,1,1); l.BackgroundTransparency = 1; l.Font = Enum.Font.Code; l.TextSize = 10
+    local bg = Instance.new("Frame", f); bg.Size = UDim2.new(1, 0, 0, 4); bg.Position = UDim2.new(0, 0, 0.7, 0); bg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    local p = Instance.new("TextButton", bg); p.Size = UDim2.new(0, 10, 0, 12); p.Position = UDim2.new((default-min)/(max-min), -5, 0.5, -6); p.BackgroundColor3 = Color3.fromRGB(255, 0, 0); p.Text = ""
+    local dragging = false
+    p.MouseButton1Down:Connect(function() dragging = true end)
+    uis.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+    uis.InputChanged:Connect(function(i) if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+        local rel = math.clamp((i.Position.X - bg.AbsolutePosition.X) / bg.AbsoluteSize.X, 0, 1); p.Position = UDim2.new(rel, -5, 0.5, -6)
+        local val = math.floor((min + (max - min) * rel) * 10) / 10; l.Text = text.." : "..val; callback(val)
+    end end)
+end
+
+local function createToggle(text, callback)
+    local b = Instance.new("TextButton", main); b.Size = UDim2.new(0.9, 0, 0, 30); b.BackgroundColor3 = Color3.fromRGB(30,30,30); b.Text = text; b.TextColor3 = Color3.new(1,1,1); b.Font = Enum.Font.Code; b.TextSize = 11
+    local on = false; b.MouseButton1Click:Connect(function() on = not on; b.BackgroundColor3 = on and Color3.fromRGB(150, 0, 0) or Color3.fromRGB(30,30,30); callback(on) end)
+    Instance.new("UICorner", b); return b
+end
+
+-- UI Setup
+local aimActive, espActive, flyActive, noclipActive, tpActive = false, false, false, false, false
+
+createToggle("AIMBOT", function(s) aimActive = s end)
+createSlider("STRENGTH", 0.1, 1.0, 0.5, function(v) _G.AimStrength = v end)
+createSlider("FOV SIZE", 30, 600, 150, function(v) _G.AimFOV = v end)
+createToggle("ESP: BOX", function(s) espActive = s end)
+createToggle("FLY (Smooth)", function(s) flyActive = s end)
+createSlider("FLY SPEED", 10, 500, 150, function(v) _G.FlySpeed = v end)
+createToggle("NO CLIP", function(s) noclipActive = s end)
+createToggle("PLAYER TP (Q KEY)", function(s) tpActive = s end) -- GUIに表示
+
+-- --- 🚀 メインロジック ---
+
+local function getTarget()
+    local t, sd = nil, _G.AimFOV; local m = uis:GetMouseLocation()
+    for _, p in pairs(players:GetPlayers()) do
+        if p ~= lp and p.Character and p.Character:FindFirstChild("Head") then
+            local pos, on = camera:WorldToViewportPoint(p.Character.Head.Position)
+            if on then
+                local mag = (Vector2.new(pos.X, pos.Y) - m).Magnitude
+                if mag < sd then sd = mag; t = Vector2.new(pos.X, pos.Y) end
+            end
+        end
+    end
+    return t
+end
+
+local boxes = {}
+runService.RenderStepped:Connect(function(dt)
+    local char = lp.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+
+    -- FOV Update
+    local mPos = uis:GetMouseLocation()
+    fovCircle.Position = UDim2.new(0, mPos.X - _G.AimFOV, 0, mPos.Y - _G.AimFOV)
+    fovCircle.Size = UDim2.new(0, _G.AimFOV * 2, 0, _G.AimFOV * 2)
+
+    -- AIMBOT
+    if aimActive and uis:IsMouseButtonPressed(_G.AimbotKey) then
+        local t = getTarget()
+        if t and mousemoverel then
+            mousemoverel((t.X - mPos.X) * _G.AimStrength, (t.Y - mPos.Y) * _G.AimStrength)
+        end
+    end
+
+    -- FLY
+    if flyActive and root then
+        root.Velocity = Vector3.new(0, 0.1, 0)
+        local md = Vector3.new(0,0,0); local cf = camera.CFrame
+        local f = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z).Unit
+        local r = Vector3.new(cf.RightVector.X, 0, cf.RightVector.Z).Unit
+        if uis:IsKeyDown(Enum.KeyCode.W) then md += f end
+        if uis:IsKeyDown(Enum.KeyCode.S) then md -= f end
+        if uis:IsKeyDown(Enum.KeyCode.D) then md += r end
+        if uis:IsKeyDown(Enum.KeyCode.A) then md -= r end
+        if uis:IsKeyDown(Enum.KeyCode.Space) then md += Vector3.new(0, 1, 0) end
+        if uis:IsKeyDown(Enum.KeyCode.LeftShift) then md -= Vector3.new(0, 1, 0) end
+        if md.Magnitude > 0 then root.CFrame = root.CFrame + (md.Unit * _G.FlySpeed * dt) end
+        if hum then hum.PlatformStand = true end
+    elseif hum then hum.PlatformStand = false end
+
+    -- NO CLIP
+    if noclipActive then
+        for _, v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide = false end end
+    end
+
+    -- ESP
+    for _, p in pairs(players:GetPlayers()) do
+        if p ~= lp and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            if espActive then
+                if not boxes[p] then 
+                    local b = Instance.new("BoxHandleAdornment", screenGui)
+                    b.AlwaysOnTop = true; b.ZIndex = 10; b.Transparency = 0.5; b.Color3 = Color3.new(1,0,0); boxes[p] = b
+                end
+                boxes[p].Adornee = p.Character.HumanoidRootPart
+                boxes[p].Size = p.Character.HumanoidRootPart.Size * Vector3.new(2, 4.5, 1.2); boxes[p].Visible = true
+            elseif boxes[p] then boxes[p].Visible = false end
+        elseif boxes[p] then boxes[p].Visible = false end
+    end
+end)
+
+-- PLAYER TP (Q KEY)
+uis.InputBegan:Connect(function(i, p)
+    if not p and tpActive and i.KeyCode == _G.TP_Hotkey then
+        local sd = _G.AimFOV; local m = uis:GetMouseLocation()
+        local targetPlr = nil
+        for _, pl in pairs(players:GetPlayers()) do
+            if pl ~= lp and pl.Character and pl.Character:FindFirstChild("HumanoidRootPart") then
+                local pos, on = camera:WorldToViewportPoint(pl.Character.HumanoidRootPart.Position)
+                if on then
+                    local mag = (Vector2.new(pos.X, pos.Y) - m).Magnitude
+                    if mag < sd then sd = mag; targetPlr = pl end
+                end
+            end
+        end
+        if targetPlr and lp.Character:FindFirstChild("HumanoidRootPart") then
+            lp.Character.HumanoidRootPart.CFrame = targetPlr.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+        end
+    end
+end)
+
+-- UI Drag
+local d, ds, sp; main.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = true; ds = i.Position; sp = main.Position end end)
+uis.InputChanged:Connect(function(i) if d and i.UserInputType == Enum.UserInputType.MouseMovement then local dl = i.Position - ds; main.Position = UDim2.new(sp.X.Scale, sp.X.Offset + dl.X, sp.Y.Scale, sp.Y.Offset + dl.Y) end end)
+uis.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = false end end)
